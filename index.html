@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>塔罗占卜师 v2.0 - 手势翻牌版</title>
+    <style>
+        /* 基础样式：营造神秘氛围 */
+        body { margin: 0; background: #050505; overflow: hidden; font-family: 'STKaiti', 'KaiTi', serif; color: #e0e0e0; }
+        canvas { display: block; }
+        
+        /* UI 浮层样式 */
+        #ui { position: fixed; top: 20px; left: 20px; z-index: 1000; pointer-events: none; max-width: 300px; }
+        h1 { font-size: 2em; color: #ffd700; text-shadow: 0 0 10px rgba(255,215,0,0.5); margin-bottom: 5px; }
+        #instruction { font-size: 1.1em; color: #aaa; margin-top: 0; }
+        
+        /* 状态指示器 */
+        #status { position: fixed; top: 20px; right: 20px; color: #55ff55; font-family: monospace; font-size: 0.9em; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 4px; }
+        
+        /* 抽牌结果卡片样式 */
+        .card-info { 
+            background: rgba(10, 10, 20, 0.8); 
+            padding: 20px; 
+            border-left: 3px solid #ffd700; 
+            border-radius: 8px; 
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            margin-top: 20px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease-out; /* 出现动画 */
+        }
+        .card-info.show { opacity: 1; transform: translateY(0); }
+        .card-info h3 { color: #ffd700; margin-top: 0; font-size: 1.5em; }
+        .card-info p { line-height: 1.6; color: #ccc; }
+        
+        /* 重置按钮 */
+        #reset-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            padding: 10px 20px;
+            background: rgba(255,215,0,0.2);
+            color: #ffd700;
+            border: 1px solid #ffd700;
+            cursor: pointer;
+            border-radius: 5px;
+            font-family: serif;
+            transition: all 0.3s;
+            z-index: 1001;
+        }
+        #reset-btn:hover { background: rgba(255,215,0,0.4); box-shadow: 0 0 15px rgba(255,215,0,0.5); }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h1>Tarot Reader</h1>
+        <p id="instruction">面对摄像头，使用大拇指和食指"捏合"以抽牌</p>
+        <div id="card-detail"></div>
+    </div>
+    <div id="status">准备中...</div>
+    <button id="reset-btn" onclick="resetCard()">重新占卜</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <script>
+        // ==========================================
+        // --- 1. 初始化 3D 场景 (Three.js) ---
+        // ==========================================
+        const scene = new THREE.Scene();
+        // 添加神秘的深蓝色背景雾，增加空间感
+        scene.fog = new THREE.FogExp2(0x050510, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true }); // 开启抗锯齿
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); // 适配高分屏
+        document.body.appendChild(renderer.domElement);
+
+        // --- 灯光设置 ---
+        const ambientLight = new THREE.AmbientLight(0x404040, 1); // 环境光
+        scene.add(ambientLight);
+        
+        // 金色点光源，模拟蜡烛或魔法能量
+        const magicLight = new THREE.PointLight(0xffd700, 2, 20);
+        magicLight.position.set(2, 3, 5);
+        scene.add(magicLight);
+
+        // ==========================================
+        // --- 2. 创建 3D 卡牌建模 ---
+        // ==========================================
+        // 定义卡牌尺寸 (黄金比例)
+        const cardWidth = 3;
+        const cardHeight = 4.85;
+        const geometry = new THREE.BoxGeometry(cardWidth, cardHeight, 0.05); // 很薄的方块
+
+        // --- 纹理加载 (占位) ---
+        // 在实际项目中，你应该使用真正的图片：new THREE.TextureLoader().load('url')
+        const materials = [
+            new THREE.MeshStandardMaterial({color: 0x1a1a1a}), // 侧面 1
+            new THREE.MeshStandardMaterial({color: 0x1a1a1a}), // 侧面 2
+            new THREE.MeshStandardMaterial({color: 0x1a1a1a}), // 侧面 3
+            new THREE.MeshStandardMaterial({color: 0x1a1a1a}), // 侧面 4
+            // 牌面 (正面) - 占位颜色：金色
+            new THREE.MeshStandardMaterial({
+                color: 0xffd700, 
+                metalness: 0.8, 
+                roughness: 0.2,
+                emissive: 0xffd700, emissiveIntensity: 0.2 // 自发光，增加神秘感
+            }), 
+            // 牌背 (反面) - 占位颜色：深紫
+            new THREE.MeshStandardMaterial({
+                color: 0x220033,
+                metalness: 0.5,
+                roughness: 0.8
+            }), 
+        ];
+        const card = new THREE.Mesh(geometry, materials);
+        scene.add(card);
+        
+        // 初始悬浮高度
+        card.position.z = 0; 
+        camera.position.z = 8; // 相机后退
+
+        // ==========================================
+        // --- 3. 塔罗牌数据与逻辑 ---
+        // ==========================================
+        const deck = [
+            { name: "0. 愚者 (The Fool)", meaning: "刻代表一个新的开始，一段充满未知与可能性的旅程。放下恐惧，纯真地向前迈进吧。" },
+            { name: "I. 魔术师 (The Magician)", meaning: "你拥有显化梦想所需的一切资源和技能。现在是采取行动、运用意志力创造你想要的世界的时候。" },
+            { name: "II. 女祭司 (The High Priestess)", meaning: "向内审视，信任你的直觉。并非所有答案都显而易见，在寂静中聆听你潜意识的声音。" },
+            { name: "III. 皇后 (The Empress)", meaning: "这是丰饶、创造力和滋养的象征。拥抱你的女性能量，与自然连接，享受生活的愉悦。" },
+            { name: "IV. 皇帝 (The Emperor)", meaning: "代表结构、权力和稳定。你需要建立秩序，运用理性和逻辑来掌控局势。" },
+            { name: "X. 命运之轮 (Wheel of Fortune)", meaning: "改变是生命唯一的永恒。转折点即将到来，顺应自然的周期，好运往往在不经意间降临。" },
+            { name: "XIX. 太阳 (The Sun)", meaning: "充满活力、成功和启蒙。这是极具正面能量的牌，代表快乐、健康和成功的渴望正在实现。" }
+        ];
+
+        // --- 状态变量 ---
+        let targetPos = new THREE.Vector3(0, 0, 0); // 卡牌目标位置
+        let isPinching = false;      // 当前手势是否为捏合
+        let isFlipped = false;       // 卡牌是否已翻转
+        let canPinch = true;         // 防止单次捏合连续触发的锁
+        let currentCardData = null;  // 当前抽到的牌数据
+
+        const cardDetailEl = document.getElementById('card-detail');
+        const instructionEl = document.getElementById('instruction');
+
+        // ==========================================
+        // --- 4. MediaPipe 手势识别集成 ---
+        // ==========================================
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        
+        // 模型参数配置
+        hands.setOptions({
+            maxNumHands: 1,           // 只追踪一只手，降低性能开销
+            modelComplexity: 1,       // 模型复杂度
+            minDetectionConfidence: 0.7, // 最小检测置信度 (提高以减少误判)
+            minTrackingConfidence: 0.7   // 最小追踪置信度
+        });
+
+        // --- 核心核心：手势处理回调 ---
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                document.getElementById('status').innerText = "🖐️ 手部已连接";
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // 1. 计算坐标映射：将手部坐标映射到 Three.js 场景
+                // 使用中指指根 (Landmark 9) 作为手掌中心参考点，更稳定
+                const handCenter = landmarks[9];
+                const x = (handCenter.x - 0.5) * -16; // 乘以系数放大移动范围
+                const y = (handCenter.y - 0.5) * -10;
+                targetPos.set(x, y, 0);
+
+                // 2. 捏合手势检测
+                // 计算大拇指尖 (4) 和 食指尖 (8) 的 3D 距离
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const distance = Math.sqrt(
+                    Math.pow(thumbTip.x - indexTip.x, 2) + 
+                    Math.pow(thumbTip.y - indexTip.y, 2) +
+                    Math.pow(thumbTip.z - indexTip.z, 2)
+                );
+                
+                // 捏合阈值 (根据实际体验调整)
+                const pinchThreshold = 0.04; 
+
+                if (distance < pinchThreshold) {
+                    // --- 触发捏合状态 ---
+                    if (!isPinching) {
+                        isPinching = true;
+                        // 视觉反馈：卡牌边缘微光
+                        card.material[4].emissiveIntensity = 0.8;
+                        magicLight.intensity = 4;
+                    }
+
+                    // --- 触发抽牌逻辑 (仅在未翻转且允许时) ---
+                    if (!isFlipped && canPinch) {
+                        flipAndDraw();
+                    }
+                } else {
+                    // --- 释放捏合状态 ---
+                    if (isPinching) {
+                        isPinching = false;
+                        card.material[4].emissiveIntensity = 0.2; // 恢复常态
+                        magicLight.intensity = 2;
+                        
+                        // 释放后，如果卡牌已翻转，重新允许捏合（用于重置或其他交互）
+                        if (isFlipped) canPinch = true; 
+                    }
+                }
+            } else {
+                document.getElementById('status').innerText = "🔎 正在寻找手部...";
+            }
+        }
+
+        hands.onResults(onResults);
+
+        // --- 摄像头工具初始化 ---
+        const videoElement = document.createElement('video');
+        const cameraHandler = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280, height: 720
+        });
+        cameraHandler.start();
+
+        // ==========================================
+        // --- 5. 交互动画与重置逻辑 ---
+        // ==========================================
+
+        // --- 核心：翻牌与抽牌逻辑 ---
+        function flipAndDraw() {
+            canPinch = false; // 锁定，防止重复触发
+            isFlipped = true;
+
+            // 1. 随机抽牌
+            const randomIndex = Math.floor(Math.random() * deck.length);
+            currentCardData = deck[randomIndex];
+            
+            // 2. 更新 UI (带动画延迟)
+            instructionEl.style.opacity = '0'; // 隐藏提示
+            
+            setTimeout(() => {
+                cardDetailEl.innerHTML = `
+                    <div class="card-info" id="info-card">
+                        <h3>${currentCardData.name}</h3>
+                        <p>${currentCardData.meaning}</p>
+                    </div>
+                `;
+                // 添加 show 类触发 CSS 出现动画
+                setTimeout(() => document.getElementById('info-card').classList.add('show'), 50);
+            }, 800); // 配合卡牌翻转的时间
+        }
+
+        // --- 重置卡牌逻辑 ---
+        function resetCard() {
+            isFlipped = false;
+            canPinch = true;
+            isPinching = false;
+
+            // 隐藏占卜结果 UI
+            const infoCard = document.getElementById('info-card');
+            if(infoCard) infoCard.classList.remove('show');
+            setTimeout(() => {
+                cardDetailEl.innerHTML = '';
+                instructionEl.style.opacity = '1';
+            }, 500);
+
+            // 视觉复位
+            card.material[4].emissiveIntensity = 0.2;
+        }
+
+        // ==========================================
+        // --- 6. 3D 渲染主循环 (Animate) ---
+        // ==========================================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 1. 卡牌物理跟随手部 (Lerp 线性插值，制造平滑感)
+            // 0.08 为跟随速度，越小越丝滑但越慢
+            card.position.lerp(targetPos, 0.08);
+
+            // 2. 翻转动画逻辑
+            if (isFlipped) {
+                // 如果已翻转，旋转到 180度 (Math.PI)，露出正面 (金色materials[4])
+                card.rotation.y = THREE.MathUtils.lerp(card.rotation.y, Math.PI, 0.06);
+                
+                // 翻转时停止闲置旋转
+                card.rotation.x = THREE.MathUtils.lerp(card.rotation.x, 0, 0.1);
+            } else {
+                // --- 未翻转时的闲置动画 ---
+                // 露出背面 (深紫 materials[5])
+                card.rotation.y = THREE.MathUtils.lerp(card.rotation.y, 0, 0.1);
+                
+                // 如果没有被捏住，制造缓慢的呼吸感旋转和浮动
+                if (!isPinching) {
+                    card.rotation.y += 0.005; // 缓慢自转
+                    card.rotation.x = Math.sin(Date.now() * 0.001) * 0.1; // 上下微晃
+                } else {
+                    // 捏住时停止，面向镜头
+                    card.rotation.x = THREE.MathUtils.lerp(card.rotation.x, 0, 0.1);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- 窗口缩放适配 ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
